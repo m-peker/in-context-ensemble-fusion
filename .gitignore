@@ -1,0 +1,22 @@
+# generated data, checkpoints and results
+data/
+runs/
+results/
+external/
+*.pt
+*.npz
+*.partial.csv
+
+# python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.pytest_cache/
+.venv/
+venv/
+
+# os / editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
