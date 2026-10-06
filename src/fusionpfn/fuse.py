@@ -43,6 +43,10 @@ def fusionpfn_predict(model, P_oof, y_tr, P_te, X_tr=None, X_te=None, max_ctx=20
     if not getattr(model, "use_loc", True):
         X_tr = X_te = None
     outs, ws = [], []
+    # The network is member-equivariant and context-invariant (Prop. 3), so additional passes only
+    # help when the context is sub-sampled (n > max_ctx); otherwise one pass is exact.
+    if n <= max_ctx:
+        n_perm = 1
     for r in range(n_perm):
         ctx = np.arange(n) if n <= max_ctx else np.sort(rng.choice(n, max_ctx, replace=False))
         perm = np.arange(K) if r == 0 else rng.permutation(K)

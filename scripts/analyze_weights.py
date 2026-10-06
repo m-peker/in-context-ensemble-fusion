@@ -43,9 +43,11 @@ def main():
         ll = -np.log(Pn[np.arange(len(yt)), :, yt]).mean(0)  # (K,) test log-loss per model
         correct = P_te.argmax(-1) == yt[:, None]
         wm = W.mean(0)
+        wa = np.abs(W).mean(0)  # exponents can be negative: shares are defined on |w|
         for k, nm in enumerate(names):
             fam.append({"dataset": meta["name"], "fold": fold, "model": nm, "mean_w": wm[k],
-                        "share": wm[k] / max(wm.sum(), 1e-9), "test_ll": ll[k]})
+                        "share": wa[k] / max(wa.sum(), 1e-9), "neg_frac": float((W[:, k] < 0).mean()),
+                        "test_ll": ll[k]})
             if 0 < correct[:, k].mean() < 1:
                 inst.append({"dataset": meta["name"], "fold": fold, "model": nm,
                              "auc": roc_auc_score(correct[:, k], W[:, k])})

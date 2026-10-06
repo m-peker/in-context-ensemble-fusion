@@ -186,9 +186,7 @@ def tabpfn_stacker(P_oof, y, P_te, seed=42, **_):
     from tabpfn import TabPFNClassifier
 
     Xa, Xb = _logfeat(P_oof), _logfeat(P_te)
-    import torch
-    m = TabPFNClassifier(device="cuda" if torch.cuda.is_available() else "cpu", random_state=seed,
-                         ignore_pretraining_limits=True)
+    m = TabPFNClassifier(device="cuda", random_state=seed, ignore_pretraining_limits=True)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         m.fit(Xa, y)
@@ -199,3 +197,116 @@ def tabpfn_stacker(P_oof, y, P_te, seed=42, **_):
 
 
 BASELINES["TabPFN_stack"] = tabpfn_stacker
+
+
+# --------------------------------------------------------------------------------------------
+# Fitted pooling rules. All are fitted on the OOF rows of the target
+# data set and differ from FusionPFN only in that their parameters are global and fitted rather
+# than instance-wise and inferred.
+#   LogPool_fit    : log p_c ∝ sum_k w_k log p_kc + b_c   (K exponents + C intercepts, unconstrained;
+#                    L2 towards the geometric mean, strength chosen by 3-fold CV)
+#   LogPool_convex : Heskes-type logarithmic pool, w = tau * softmax(a) (convex weights + temperature)
+#   TS_avg         : per-member temperature scaling, then arithmetic mean ("calibrate, then average")
+#   LinPool_fit    : linear pool with simplex weights maximising the OOF log score
+#                    (stacking of predictive distributions, Yao et al. 2018)
+# --------------------------------------------------------------------------------------------
+from scipy.optimize import minimize, minimize_scalar  # noqa: E402
+from sklearn.model_selection import StratifiedKFold  # noqa: E402
+
+
+def _logs(P):
+    return np.log(_norm(P))  # (n, K, C), clipped at log(EPS)
+
+
+def _softmax(z):
+    z = z - z.max(-1, keepdims=True)
+    e = np.exp(z)
+    return e / e.sum(-1, keepdims=True)
+
+
+def _fit_logpool(L, y, lam, K, C):
+    Y = np.eye(C)[y]
+    w0 = np.full(K, 1.0 / K)
+
+    def f(theta):
+        w, b = theta[:K], theta[K:]
+        S = _softmax(np.einsum("k,nkc->nc", w, L) + b)
+        nll = -np.log(np.clip(S[np.arange(len(y)), y], 1e-15, None)).mean()
+        G = (S - Y) / len(y)
+        gw = np.einsum("nc,nkc->k", G, L) + 2 * lam * (w - w0)
+        gb = G.sum(0) + 2 * lam * b
+        return nll + lam * (np.sum((w - w0) ** 2) + np.sum(b ** 2)), np.concatenate([gw, gb])
+
+    res = minimize(f, np.concatenate([w0, np.zeros(C)]), jac=True, method="L-BFGS-B", options={"maxiter": 500})
+    return res.x[:K], res.x[K:]
+
+
+def logpool_fit(P_oof, y, P_te, lams=(1e-4, 1e-3, 1e-2, 1e-1, 1.0), seed=42, **_):
+    n, K, C = P_oof.shape
+    L, Lt = _logs(P_oof), _logs(P_te)
+    counts = np.bincount(y, minlength=C)
+    folds = int(min(3, counts[counts > 0].min()))
+    best = lams[2]
+    if folds >= 2:
+        cv = []
+        for lam in lams:
+            ll = 0.0
+            for a, b in StratifiedKFold(folds, shuffle=True, random_state=seed).split(L[:, 0], y):
+                w, c = _fit_logpool(L[a], y[a], lam, K, C)
+                S = _softmax(np.einsum("k,nkc->nc", w, L[b]) + c)
+                ll += -np.log(np.clip(S[np.arange(len(b)), y[b]], 1e-15, None)).sum()
+            cv.append(ll)
+        best = lams[int(np.argmin(cv))]
+    w, c = _fit_logpool(L, y, best, K, C)
+    return _norm(_softmax(np.einsum("k,nkc->nc", w, Lt) + c))
+
+
+def logpool_convex(P_oof, y, P_te, lam=1e-3, **_):
+    n, K, C = P_oof.shape
+    L, Lt = _logs(P_oof), _logs(P_te)
+    Y = np.eye(C)[y]
+
+    def f(theta):
+        a, lt = theta[:K], theta[K]
+        s = _softmax(a); tau = np.exp(lt); w = tau * s
+        S = _softmax(np.einsum("k,nkc->nc", w, L))
+        nll = -np.log(np.clip(S[np.arange(n), y], 1e-15, None)).mean()
+        gw = np.einsum("nc,nkc->k", (S - Y) / n, L)
+        ga = tau * (s * gw - s * (s @ gw)) + 2 * lam * a
+        gt = w @ gw
+        return nll + lam * np.sum(a ** 2), np.concatenate([ga, [gt]])
+
+    res = minimize(f, np.zeros(K + 1), jac=True, method="L-BFGS-B", options={"maxiter": 500})
+    w = np.exp(res.x[K]) * _softmax(res.x[:K])
+    return _norm(_softmax(np.einsum("k,nkc->nc", w, Lt)))
+
+
+def ts_average(P_oof, y, P_te, **_):
+    n, K, C = P_oof.shape
+    L, Lt = _logs(P_oof), _logs(P_te)
+    out = np.zeros(P_te.shape[::2])
+    for k in range(K):
+        nll = lambda lb: -np.log(np.clip(_softmax(np.exp(lb) * L[:, k])[np.arange(n), y], 1e-15, None)).mean()
+        lb = minimize_scalar(nll, bounds=(-4, 3), method="bounded").x
+        out += _softmax(np.exp(lb) * Lt[:, k])
+    return _norm(out / K)
+
+
+def linpool_fit(P_oof, y, P_te, **_):
+    n, K, C = P_oof.shape
+    Py = _norm(P_oof)[np.arange(n), :, y]  # (n, K) probability of the true class per member
+
+    def f(a):
+        s = _softmax(a); p = Py @ s
+        nll = -np.log(np.clip(p, 1e-15, None)).mean()
+        gs = -(Py / np.clip(p, 1e-15, None)[:, None]).mean(0)
+        return nll, s * gs - s * (s @ gs)
+
+    res = minimize(f, np.zeros(K), jac=True, method="L-BFGS-B", options={"maxiter": 500})
+    return _norm(np.einsum("k,nkc->nc", _softmax(res.x), _norm(P_te)))
+
+
+BASELINES["LogPool_fit"] = logpool_fit
+BASELINES["LogPool_convex"] = logpool_convex
+BASELINES["TS_avg"] = ts_average
+BASELINES["LinPool_fit"] = linpool_fit

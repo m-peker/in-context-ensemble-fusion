@@ -121,8 +121,9 @@ python scripts/plots.py --prefix test --ref FusionPFN:fusionpfn_seed42_p4
 
 Data sets are split once into a development and a test part (`split_of` in `scripts/evaluate.py`); all design
 decisions should be taken on `--split dev`. Baselines: single best, arithmetic and geometric mean, majority vote,
-greedy ensemble selection, stacking with logistic regression, KNORA-E, Neural Ensemblers (stacking and averaging) and
-TabPFN v2 as a stacker. Evaluation runs are incremental and can be resumed or split with `--shard i/n`.
+greedy ensemble selection, stacking with logistic regression, fitted logarithmic pools (unconstrained and convex),
+a fitted linear pool (Bayesian stacking), temperature scaling + averaging, KNORA-E, Neural Ensemblers (stacking and
+averaging) and TabPFN v2 as a stacker. Evaluation runs are incremental and can be resumed or split with `--shard i/n`.
 
 ### 4. Analysis
 
