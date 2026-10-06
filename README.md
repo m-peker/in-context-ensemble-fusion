@@ -30,8 +30,9 @@ pip install -r requirements.txt
 Install a PyTorch build that matches your CUDA version first if you want GPU support
 (see [pytorch.org](https://pytorch.org/get-started/locally/)). Inference also runs on CPU; pretraining requires a CUDA GPU.
 
-Pretrained weights: download `fusionpfn.pt` from the [Releases](../../releases) page, or pretrain them yourself
-(see [Pretraining](#2-pretraining)).
+Pretrained weights are not distributed with this repository. Create them with the pretraining recipe
+(see [Pretraining](#2-pretraining)); the examples below assume the resulting checkpoint is available as `fusionpfn.pt`
+(e.g. a copy of `runs/ckpt/fusionpfn_seed42.pt`).
 
 ## Quick start
 
